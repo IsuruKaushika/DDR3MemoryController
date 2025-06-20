@@ -1,3 +1,444 @@
+// DDR4 Memory Controller Top Module
+module ddr4_controller #(
+    parameter ADDR_WIDTH = 17,
+    parameter DATA_WIDTH = 64,
+    parameter BANK_WIDTH = 3,
+    parameter ROW_WIDTH = 16,
+    parameter COL_WIDTH = 10,
+    parameter DRAM_WIDTH = 8,
+    parameter BURST_LENGTH = 8
+)(
+    // System Interface
+    input wire clk,
+    input wire reset_n,
+    
+    // User Interface
+    input wire [ADDR_WIDTH-1:0] user_addr,
+    input wire [DATA_WIDTH-1:0] user_write_data,
+    output wire [DATA_WIDTH-1:0] user_read_data,
+    input wire user_cmd_valid,
+    input wire user_write_en,
+    output wire user_ready,
+    output wire user_read_data_valid,
+    
+    // DDR4 PHY Interface
+    output wire [15:0] ddr4_adr,
+    output wire [1:0] ddr4_ba,
+    output wire ddr4_bg,
+    output wire ddr4_cke,
+    output wire ddr4_odt,
+    output wire ddr4_cs_n,
+    output wire ddr4_act_n,
+    output wire ddr4_reset_n,
+    inout wire [DRAM_WIDTH-1:0] ddr4_dq,
+    inout wire [DRAM_WIDTH/8-1:0] ddr4_dqs_t,
+    inout wire [DRAM_WIDTH/8-1:0] ddr4_dqs_c,
+    output wire ddr4_ck_t,
+    output wire ddr4_ck_c,
+    output wire ddr4_parity,
+    output wire ddr4_alert_n
+);
+
+    // Internal wires and registers
+    wire [ADDR_WIDTH-1:0] cmd_addr;
+    wire cmd_valid;
+    wire cmd_write;
+    wire cmd_read;
+    wire cmd_ready;
+    
+    wire [DATA_WIDTH-1:0] write_data;
+    wire write_data_valid;
+    wire write_data_ready;
+    
+    wire [DATA_WIDTH-1:0] read_data;
+    wire read_data_valid;
+    
+    wire phy_init_done;
+    wire phy_ready;
+    wire [3:0] phy_burst_cnt;
+    
+    // Command Scheduler
+    command_scheduler #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .BANK_WIDTH(BANK_WIDTH),
+        .ROW_WIDTH(ROW_WIDTH),
+        .COL_WIDTH(COL_WIDTH)
+    ) u_command_scheduler (
+        .clk(clk),
+        .reset_n(reset_n),
+        
+        // User Interface
+        .user_addr(user_addr),
+        .user_cmd_valid(user_cmd_valid),
+        .user_write_en(user_write_en),
+        .user_ready(user_ready),
+        
+        // Command FIFO Interface
+        .cmd_addr(cmd_addr),
+        .cmd_valid(cmd_valid),
+        .cmd_write(cmd_write),
+        .cmd_read(cmd_read),
+        .cmd_ready(cmd_ready),
+        
+        // Refresh Control
+        .ref_req(ref_req),
+        .ref_ack(ref_ack),
+        
+        // Timing Parameters
+        .tRC(tRC),
+        .tRAS(tRAS),
+        .tRP(tRP),
+        .tRCD(tRCD),
+        .tRRD(tRRD),
+        .tFAW(tFAW),
+        .tWTR(tWTR),
+        .tWR(tWR),
+        .tCCD(tCCD)
+    );
+    
+    // Data Path
+    data_path #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .DRAM_WIDTH(DRAM_WIDTH),
+        .BURST_LENGTH(BURST_LENGTH)
+    ) u_data_path (
+        .clk(clk),
+        .reset_n(reset_n),
+        
+        // User Interface
+        .user_write_data(user_write_data),
+        .user_read_data(user_read_data),
+        .user_read_data_valid(user_read_data_valid),
+        
+        // Command Interface
+        .cmd_write(cmd_write),
+        .cmd_read(cmd_read),
+        .cmd_valid(cmd_valid),
+        
+        // Internal Data Interface
+        .write_data(write_data),
+        .write_data_valid(write_data_valid),
+        .write_data_ready(write_data_ready),
+        
+        .read_data(read_data),
+        .read_data_valid(read_data_valid),
+        
+        // PHY Interface
+        .phy_burst_cnt(phy_burst_cnt)
+    );
+    
+    // Address/Command Decoder
+    addr_cmd_decoder #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .BANK_WIDTH(BANK_WIDTH),
+        .ROW_WIDTH(ROW_WIDTH),
+        .COL_WIDTH(COL_WIDTH)
+    ) u_addr_cmd_decoder (
+        .clk(clk),
+        .reset_n(reset_n),
+        
+        // Command Interface
+        .cmd_addr(cmd_addr),
+        .cmd_valid(cmd_valid),
+        .cmd_write(cmd_write),
+        .cmd_read(cmd_read),
+        .cmd_ready(cmd_ready),
+        
+        // PHY Command Interface
+        .phy_cmd(phy_cmd),
+        .phy_addr(phy_addr),
+        .phy_bank(phy_bank),
+        .phy_bg(phy_bg),
+        .phy_act_n(phy_act_n),
+        .phy_cs_n(phy_cs_n),
+        
+        // Timing Control
+        .timing_control(timing_control)
+    );
+    
+    // Refresh Controller
+    refresh_controller u_refresh_controller (
+        .clk(clk),
+        .reset_n(reset_n),
+        .ref_req(ref_req),
+        .ref_ack(ref_ack),
+        .tREFI(tREFI),
+        .tRFC(tRFC)
+    );
+    
+    // PHY Interface
+    ddr4_phy_interface #(
+        .DRAM_WIDTH(DRAM_WIDTH),
+        .BURST_LENGTH(BURST_LENGTH)
+    ) u_phy_interface (
+        .clk(clk),
+        .reset_n(reset_n),
+        
+        // Command Interface
+        .phy_cmd(phy_cmd),
+        .phy_addr(phy_addr),
+        .phy_bank(phy_bank),
+        .phy_bg(phy_bg),
+        .phy_act_n(phy_act_n),
+        .phy_cs_n(phy_cs_n),
+        
+        // Data Interface
+        .write_data(write_data),
+        .write_data_valid(write_data_valid),
+        .write_data_ready(write_data_ready),
+        
+        .read_data(read_data),
+        .read_data_valid(read_data_valid),
+        
+        // DDR4 PHY Signals
+        .ddr4_adr(ddr4_adr),
+        .ddr4_ba(ddr4_ba),
+        .ddr4_bg(ddr4_bg),
+        .ddr4_cke(ddr4_cke),
+        .ddr4_odt(ddr4_odt),
+        .ddr4_cs_n(ddr4_cs_n),
+        .ddr4_act_n(ddr4_act_n),
+        .ddr4_reset_n(ddr4_reset_n),
+        .ddr4_dq(ddr4_dq),
+        .ddr4_dqs_t(ddr4_dqs_t),
+        .ddr4_dqs_c(ddr4_dqs_c),
+        .ddr4_ck_t(ddr4_ck_t),
+        .ddr4_ck_c(ddr4_ck_c),
+        .ddr4_parity(ddr4_parity),
+        .ddr4_alert_n(ddr4_alert_n),
+        
+        // Status
+        .phy_init_done(phy_init_done),
+        .phy_ready(phy_ready),
+        .phy_burst_cnt(phy_burst_cnt)
+    );
+    
+    // Timing Controller
+    timing_controller u_timing_controller (
+        .clk(clk),
+        .reset_n(reset_n),
+        .timing_control(timing_control),
+        .tRC(tRC),
+        .tRAS(tRAS),
+        .tRP(tRP),
+        .tRCD(tRCD),
+        .tRRD(tRRD),
+        .tFAW(tFAW),
+        .tWTR(tWTR),
+        .tWR(tWR),
+        .tCCD(tCCD),
+        .tREFI(tREFI),
+        .tRFC(tRFC)
+    );
+    
+    // Initialization FSM
+    init_fsm u_init_fsm (
+        .clk(clk),
+        .reset_n(reset_n),
+        .phy_init_done(phy_init_done),
+        .phy_ready(phy_ready),
+        .init_done(init_done)
+    );
+    
+endmodule
+
+// Command Scheduler Module
+module command_scheduler #(
+    parameter ADDR_WIDTH = 17,
+    parameter BANK_WIDTH = 3,
+    parameter ROW_WIDTH = 16,
+    parameter COL_WIDTH = 10
+)(
+    input wire clk,
+    input wire reset_n,
+    
+    // User Interface
+    input wire [ADDR_WIDTH-1:0] user_addr,
+    input wire user_cmd_valid,
+    input wire user_write_en,
+    output wire user_ready,
+    
+    // Command FIFO Interface
+    output reg [ADDR_WIDTH-1:0] cmd_addr,
+    output reg cmd_valid,
+    output reg cmd_write,
+    output reg cmd_read,
+    input wire cmd_ready,
+    
+    // Refresh Control
+    input wire ref_req,
+    output wire ref_ack,
+    
+    // Timing Parameters
+    output reg [7:0] tRC,
+    output reg [7:0] tRAS,
+    output reg [7:0] tRP,
+    output reg [7:0] tRCD,
+    output reg [3:0] tRRD,
+    output reg [5:0] tFAW,
+    output reg [3:0] tWTR,
+    output reg [7:0] tWR,
+    output reg [3:0] tCCD
+);
+
+    // Bank state tracking
+    typedef enum {
+        BANK_IDLE,
+        BANK_ACTIVE,
+        BANK_PRECHARGING,
+        BANK_REFRESHING
+    } bank_state_t;
+    
+    bank_state_t [2**BANK_WIDTH-1:0] bank_state;
+    reg [ROW_WIDTH-1:0] bank_open_row [2**BANK_WIDTH-1:0];
+    reg [7:0] bank_timer [2**BANK_WIDTH-1:0];
+    
+    // Command queue
+    reg [ADDR_WIDTH-1:0] cmd_queue_addr [0:7];
+    reg cmd_queue_write [0:7];
+    reg cmd_queue_valid [0:7];
+    reg [2:0] cmd_queue_ptr;
+    
+    // Timing counters
+    reg [3:0] rrds_counter;
+    reg [5:0] faw_counter;
+    
+    // Initialize timing parameters (values in clock cycles)
+    initial begin
+        tRC = 44;   // Row cycle time
+        tRAS = 36;  // Row active time
+        tRP = 12;    // Row precharge time
+        tRCD = 12;   // Row to column delay
+        tRRD = 6;    // Row to row delay
+        tFAW = 24;   // Four activation window
+        tWTR = 4;    // Write to read delay
+        tWR = 12;    // Write recovery time
+        tCCD = 4;    // Column to column delay
+    end
+    
+    // Command scheduling logic
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            // Reset logic
+        end else begin
+            // Command scheduling state machine
+            // This would include:
+            // - Bank management
+            // - Timing checks
+            // - Command prioritization
+            // - Refresh handling
+            // - Arbitration between reads and writes
+        end
+    end
+    
+    // Bank management logic
+    always @(posedge clk) begin
+        for (int i = 0; i < 2**BANK_WIDTH; i++) begin
+            if (bank_timer[i] > 0)
+                bank_timer[i] <= bank_timer[i] - 1;
+        end
+    end
+    
+endmodule
+
+// Data Path Module
+module data_path #(
+    parameter DATA_WIDTH = 64,
+    parameter DRAM_WIDTH = 8,
+    parameter BURST_LENGTH = 8
+)(
+    input wire clk,
+    input wire reset_n,
+    
+    // User Interface
+    input wire [DATA_WIDTH-1:0] user_write_data,
+    output wire [DATA_WIDTH-1:0] user_read_data,
+    output wire user_read_data_valid,
+    
+    // Command Interface
+    input wire cmd_write,
+    input wire cmd_read,
+    input wire cmd_valid,
+    
+    // Internal Data Interface
+    output wire [DATA_WIDTH-1:0] write_data,
+    output wire write_data_valid,
+    input wire write_data_ready,
+    
+    input wire [DATA_WIDTH-1:0] read_data,
+    input wire read_data_valid,
+    
+    // PHY Interface
+    input wire [3:0] phy_burst_cnt
+);
+
+    // Write data FIFO
+    reg [DATA_WIDTH-1:0] write_fifo [0:15];
+    reg [3:0] write_fifo_wr_ptr;
+    reg [3:0] write_fifo_rd_ptr;
+    reg [4:0] write_fifo_count;
+    
+    // Read data FIFO
+    reg [DATA_WIDTH-1:0] read_fifo [0:15];
+    reg [3:0] read_fifo_wr_ptr;
+    reg [3:0] read_fifo_rd_ptr;
+    reg [4:0] read_fifo_count;
+    
+    // Data alignment and masking logic
+    reg [DATA_WIDTH-1:0] aligned_write_data;
+    reg [DATA_WIDTH/8-1:0] write_mask;
+    
+    // ECC generation/checking
+    reg [7:0] ecc_syndrome;
+    wire [7:0] ecc_generated;
+    
+    // Assign outputs
+    assign write_data = aligned_write_data;
+    assign write_data_valid = (write_fifo_count > 0);
+    assign user_read_data = read_fifo[read_fifo_rd_ptr];
+    assign user_read_data_valid = (read_fifo_count > 0);
+    
+    // Write data handling
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            // Reset logic
+        end else begin
+            // Write data path logic
+            // - FIFO management
+            // - Data alignment
+            // - ECC generation
+            // - Mask generation
+        end
+    end
+    
+    // Read data handling
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            // Reset logic
+        end else begin
+            // Read data path logic
+            // - FIFO management
+            // - Data alignment
+            // - ECC checking
+            // - Error correction
+        end
+    end
+    
+    // ECC generator
+    ecc_generator u_ecc_gen (
+        .data_in(write_data),
+        .ecc_out(ecc_generated)
+    );
+    
+    // ECC checker
+    ecc_checker u_ecc_check (
+        .data_in(read_data),
+        .ecc_in(read_data_ecc),
+        .syndrome(ecc_syndrome),
+        .corrected_data(corrected_read_data)
+    );
+    
+endmodule
 
 // Address/Command Decoder Module
 module addr_cmd_decoder #(
